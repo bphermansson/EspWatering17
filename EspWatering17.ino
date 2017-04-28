@@ -1,35 +1,42 @@
+// EspWifi
 #include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
-#include <WiFiUdp.h>
+// Mqtt
+#include <PubSubClient.h>
+// DS18B20
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include <ArduinoOTA.h>
-#include "Adafruit_MQTT.h"
-#include "Adafruit_MQTT_Client.h"
+
+// DS18B20 on Gpio13
+#define ONE_WIRE_BUS 13  // DS18B20 pin
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature DS18B20(&oneWire);
+
+// For reading Vcc
+ADC_MODE(ADC_VCC);
 
 const char* ssid = "NETGEAR83";
 const char* password = "..........";
+const char* mqtt_server = "192.168.1.79";
 
-/************************* Adafruit.io Setup *********************************/
-#define AIO_SERVER      "io.adafruit.com"
-#define AIO_SERVERPORT  1883                   // use 8883 for SSL
-#define AIO_USERNAME    "phermansson"
-#define AIO_KEY         "74ad9c33f2804170aca7ce92b96ce86d"
+// Mqtt topic to publish to
+const char* mqtt_pub_topic = "espwatering";
 
-WiFiClient client;
-Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
-Adafruit_MQTT_Publish adc = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/photocell");
-
-void MQTT_connect();
+WiFiClient espClient;
+PubSubClient client(espClient);
+long lastMsg = 0;
+char msg[50];
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Booting");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("Connection Failed! Rebooting...");
-    delay(5000);
-    ESP.restart();
-  }
+  setup_wifi();
+
+  // Mqtt
+  client.setServer(mqtt_server, 1883);
+  // Mqtt callback for incoming messages
+  //client.setCallback(callback);
+
 
   // Port defaults to 8266
   // ArduinoOTA.setPort(8266);
@@ -58,49 +65,85 @@ void setup() {
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
   });
   ArduinoOTA.begin();
-  Serial.println("Ready");
-  Serial.print("IP address: ");
+
+  // Read Vcc
+  float vcc = ESP.getVcc();
+  Serial.print("Vcc Value:"); //Print Message
+  Serial.println(vcc);     //Print ADC value
+}
+
+void setup_wifi() {
+  delay(10);
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 }
 
-void loop() {
-  ArduinoOTA.handle();
-  int adcvalue = analogRead(A0);
-  Serial.print("ADC Value:"); //Print Message
-  Serial.println(adcvalue);     //Print ADC value
-
-  MQTT_connect();
-  if (! adc.publish(adcvalue)) {
-    Serial.println(F("Failed"));
-  } else {
-    Serial.println(F("OK!"));
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("Espwatering", "emonpi", "emonpimqtt2016")) {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      client.publish(mqtt_pub_topic, "hello from EspWatering");
+      // ... and resubscribe
+      //client.subscribe(mqtt_sub_topic);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
   }
-  
-  delay(10000);
 }
-// Function to connect and reconnect as necessary to the MQTT server.
-// Should be called in the loop function and it will take care if connecting.
-void MQTT_connect() {
-  int8_t ret;
 
-  // Stop if already connected.
-  if (mqtt.connected()) {
-    return;
+
+void loop() {
+  float temp;
+
+  ArduinoOTA.handle();
+
+  if (!client.connected()) {
+    reconnect();
   }
+  client.loop();
+  
+  //int volt = (adcvalue * vPow*10) / 1024.0;   // Multiply by ten -> gives a 'decimal' with an int
+  //int battv = volt / (r2 / (r1 + r2));
+  
+  //Serial.println(battv); 
 
-  Serial.print("Connecting to MQTT... ");
+  // Read Vcc
+  float vcc = ESP.getVcc();
+  Serial.print("Vcc Value:"); //Print Message
+  Serial.println(vcc);     //Print ADC value
 
-  uint8_t retries = 3;
-  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
-       Serial.println(mqtt.connectErrorString(ret));
-       Serial.println("Retrying MQTT connection in 5 seconds...");
-       mqtt.disconnect();
-       delay(5000);  // wait 5 seconds
-       retries--;
-       if (retries == 0) {
-         // basically die and wait for WDT to reset me
-         while (1);
-       }
-  }
-  Serial.println("MQTT Connected!");
+  DS18B20.requestTemperatures(); 
+  temp = DS18B20.getTempCByIndex(0);
+  Serial.print("Temperature: ");
+  Serial.println(temp);
+
+  // Convert and publish to Mqtt broker
+  dtostrf(temp,5,2,msg);
+  
+  Serial.print("Publish message: ");
+  Serial.println(msg);
+  client.publish(mqtt_pub_topic, msg);
+
+  delay(120000);
 }
