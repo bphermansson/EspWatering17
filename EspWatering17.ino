@@ -5,15 +5,55 @@
 // DS18B20
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <ArduinoOTA.h>
+//#include <ArduinoOTA.h>
+#include <ArduinoJson.h>
+
+#define SLEEP_DELAY_IN_SECONDS 30
 
 // DS18B20 on Gpio13
 #define ONE_WIRE_BUS 13  // DS18B20 pin
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
 
-// For reading Vcc
-ADC_MODE(ADC_VCC);
+// Home Assistant server 
+// http://192.168.1.142:8123/api/states/binary_sensor.ljusute
+
+const char* server = " http://192.168.1.142";  // server's address
+const int port = 8123;
+const char* resource = "/api/states/binary_sensor.ljusute"; // http resource
+const unsigned long HTTP_TIMEOUT = 10000;  // max respone time from server
+const size_t MAX_CONTENT_SIZE = 512;       // max size of the HTTP response
+
+// The type of data that we want to extract from the page
+struct UserData {
+  char state[5];
+};
+
+/* Spänningsdelare på solcell
+100k till jord, 390k till solcell
+5 volt in ger 1,02 ut
+
+0,675 på adc - Adc Value:646
+adc 0,669 solcell 3,292
+
+1023/3,3 * adcvolt = adcvalue
+310 * adcvolt = adcvalue
+adcvolt=adcvalue/310
+
+solcell 3,153V
+adc 0,641V
+adc 613
+
+solcell 1,127V
+adc 0,228V
+adc 227
+
+Divider delar 4,92
+
+adc value * 5 = Solar cell volt i mV.
+
+*/
+int solarVoltAdc = 0;
 
 const char* ssid = "NETGEAR83";
 const char* password = "..........";
@@ -28,7 +68,7 @@ long lastMsg = 0;
 char msg[50];
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   Serial.println("Booting");
   setup_wifi();
 
@@ -37,39 +77,16 @@ void setup() {
   // Mqtt callback for incoming messages
   //client.setCallback(callback);
 
-
-  // Port defaults to 8266
-  // ArduinoOTA.setPort(8266);
-
-  // Hostname defaults to esp8266-[ChipID]
-  // ArduinoOTA.setHostname("myesp8266");
-
-  // No authentication by default
-  // ArduinoOTA.setPassword((const char *)"123");
-
-  ArduinoOTA.onStart([]() {
-    Serial.println("Start");
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
-  });
-  ArduinoOTA.begin();
-
   // Read Vcc
-  float vcc = ESP.getVcc();
-  Serial.print("Vcc Value:"); //Print Message
-  Serial.println(vcc);     //Print ADC value
+  solarVoltAdc = analogRead(A0);
+  int solarvolt = solarVoltAdc * 5;
+
+  Serial.print("Adc Value:"); //Print Message
+  Serial.println(solarVoltAdc);     //Print ADC value
+
+  // Water level sensor on Gpio5
+  //pinMode(5, INPUT_PULLUP);
+
 }
 
 void setup_wifi() {
@@ -80,6 +97,7 @@ void setup_wifi() {
   Serial.println(ssid);
 
   WiFi.begin(ssid, password);
+  WiFi.hostname("EspWatering");
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -114,36 +132,152 @@ void reconnect() {
 
 
 void loop() {
+  // Temp value from DS8B20
   float temp;
+  
+  // Json object to send via Mqtt
+  StaticJsonBuffer<200> jsonBuffer;
+  JsonObject& root = jsonBuffer.createObject();
 
-  ArduinoOTA.handle();
-
+  // Reconnect to Mqtt server if necessary
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
-  
-  //int volt = (adcvalue * vPow*10) / 1024.0;   // Multiply by ten -> gives a 'decimal' with an int
-  //int battv = volt / (r2 / (r1 + r2));
-  
-  //Serial.println(battv); 
 
-  // Read Vcc
-  float vcc = ESP.getVcc();
-  Serial.print("Vcc Value:"); //Print Message
-  Serial.println(vcc);     //Print ADC value
+// Check solar voltage and temperature, then send it via Mqtt
+  solarVoltAdc = analogRead(A0);
+  Serial.print("Adc Value:"); 
+  Serial.println(solarVoltAdc);     //Print ADC value
+  int solarvolt = solarVoltAdc * 5;
+  Serial.print("Solar cell volt:"); 
+  Serial.print(solarvolt); 
+  Serial.println("mV"); 
+  // Add solar volt value to Json object
+  root["solarvolt"] = solarvolt;
 
   DS18B20.requestTemperatures(); 
-  temp = DS18B20.getTempCByIndex(0);
+  temp = DS18B20.getTempCByIndex(0);  // temp is a float
   Serial.print("Temperature: ");
   Serial.println(temp);
 
   // Convert and publish to Mqtt broker
-  dtostrf(temp,5,2,msg);
   
-  Serial.print("Publish message: ");
-  Serial.println(msg);
-  client.publish(mqtt_pub_topic, msg);
+  // Add temp value to json object
+  root["temp"] = temp;
 
+  // Convert json object to char
+  root.printTo((char*)msg, root.measureLength() + 1);
+
+  //https://gist.github.com/virgilvox/ffe1cc08a240db9792d3
+  Serial.println("Publish to Mqtt.");
+  client.publish(mqtt_pub_topic, msg);  // Payload as char
+
+  // Shall the waterpump run?
+  // Lets ask the Home Assistant installation if it's been run today
+  // If not, run it. 
+  // We get Json data from http://192.168.1.142:8123/api/states/binary_sensor.ljusute
+  if (connect(server)) {
+    if (sendRequest(server, resource) && skipResponseHeaders()) {
+      UserData userData;
+      if (readReponseContent(&userData)) {
+        printUserData(&userData);
+      }
+    }
+  }
+  disconnect();
+  
+
+  Serial.println("Disconnect Mqtt.");
+  client.disconnect();
+  Serial.print("Disconnect Wifi.");
+  //WiFi.disconnect();
+  delay(100);
+  Serial.print("Enter deep sleep.");
+  
+  //ESP.deepSleep(SLEEP_DELAY_IN_SECONDS * 1000000, WAKE_RF_DEFAULT);
+  delay(500); // wait for deep sleep to happen
   delay(120000);
+  delay(10000); // For debug
 }
+
+// Open connection to the HTTP server
+bool connect(const char* hostName) {
+  Serial.print("Connect to ");
+  Serial.println(hostName);
+  bool ok = espClient.connect(hostName, port);
+  Serial.println(ok ? "Connected" : "Connection Failed!");
+  return ok;
+}
+
+// Send the HTTP GET request to the server
+bool sendRequest(const char* host, const char* resource) {
+  Serial.print("GET ");
+  Serial.println(resource);
+
+  espClient.print("GET ");
+  espClient.print(resource);
+  espClient.println(" HTTP/1.0");
+  espClient.print("Host: ");
+  espClient.println(host);
+  espClient.println("Connection: close");
+  espClient.println();
+
+  return true;
+}
+
+// Skip HTTP headers so that we are at the beginning of the response's body
+bool skipResponseHeaders() {
+  // HTTP headers end with an empty line
+  char endOfHeaders[] = "\r\n\r\n";
+
+  espClient.setTimeout(HTTP_TIMEOUT);
+  bool ok = espClient.find(endOfHeaders);
+
+  if (!ok) {
+    Serial.println("No response or invalid response!");
+  }
+
+  return ok;
+}
+bool readReponseContent(struct UserData* userData) {
+  // Compute optimal size of the JSON buffer according to what we need to parse.
+  // This is only required if you use StaticJsonBuffer.
+  const size_t BUFFER_SIZE =
+      JSON_OBJECT_SIZE(8)    // the root object has 8 elements
+      + JSON_OBJECT_SIZE(5)  // the "address" object has 5 elements
+      + JSON_OBJECT_SIZE(2)  // the "geo" object has 2 elements
+      + JSON_OBJECT_SIZE(3)  // the "company" object has 3 elements
+      + MAX_CONTENT_SIZE;    // additional space for strings
+
+  // Allocate a temporary memory pool
+  DynamicJsonBuffer jsonBuffer(BUFFER_SIZE);
+
+  JsonObject& root = jsonBuffer.parseObject(client);
+
+  if (!root.success()) {
+    Serial.println("JSON parsing failed!");
+    return false;
+  }
+
+  // Here were copy the strings we're interested in
+  strcpy(userData->state, root["state"]);
+  // It's not mandatory to make a copy, you could just use the pointers
+  // Since, they are pointing inside the "content" buffer, so you need to make
+  // sure it's still in memory when you read the string
+
+  return true;
+}
+
+// Print the data extracted from the JSON
+void printUserData(const struct UserData* userData) {
+  Serial.print("State = ");
+  Serial.println(userData->state);
+}
+
+// Close the connection with the HTTP server
+void disconnect() {
+  Serial.println("Disconnect");
+  espClient.stop();
+}
+
