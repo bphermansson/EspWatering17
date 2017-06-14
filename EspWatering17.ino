@@ -7,6 +7,7 @@
 #include <DallasTemperature.h>
 //#include <ArduinoOTA.h>
 #include <ArduinoJson.h>
+#include <ESP8266HTTPClient.h>
 
 #define SLEEP_DELAY_IN_SECONDS 30
 
@@ -18,8 +19,8 @@ DallasTemperature DS18B20(&oneWire);
 // Home Assistant server 
 // http://192.168.1.142:8123/api/states/binary_sensor.ljusute
 
-const char* server = " http://192.168.1.142";  // server's address
-const int port = 8123;
+const char* server = " 192.168.1.142";  // server's address
+int port = 8123;
 const char* resource = "/api/states/binary_sensor.ljusute"; // http resource
 const unsigned long HTTP_TIMEOUT = 10000;  // max respone time from server
 const size_t MAX_CONTENT_SIZE = 512;       // max size of the HTTP response
@@ -177,16 +178,40 @@ void loop() {
   // Lets ask the Home Assistant installation if it's been run today
   // If not, run it. 
   // We get Json data from http://192.168.1.142:8123/api/states/binary_sensor.ljusute
-  if (connect(server)) {
-    if (sendRequest(server, resource) && skipResponseHeaders()) {
-      UserData userData;
-      if (readReponseContent(&userData)) {
-        printUserData(&userData);
-      }
-    }
-  }
-  disconnect();
-  
+  Serial.println("connect to Hass");
+
+  HTTPClient http;
+  http.begin("http://192.168.1.142:8123/api/states/binary_sensor.ljusute"); //HTTP
+  int httpCode = http.GET();
+  if(httpCode > 0) {
+       // HTTP header has been send and Server response header has been handled
+            Serial.println("[HTTP] GET... code: %d\n");
+            Serial.println(httpCode);
+
+            // file found at server
+            if(httpCode == HTTP_CODE_OK) {
+                String payload = http.getString();
+                Serial.println(payload);
+                StaticJsonBuffer<300> jsonBuffer;
+                char json[300];
+                payload.toCharArray(json,300);
+                JsonObject& root = jsonBuffer.parseObject(json);
+                // Test if parsing succeeds.
+                if (!root.success()) {
+                  Serial.println("parseObject() failed");
+                  //return;
+                }
+                String state = root["state"];
+                Serial.println("The Hass switch is: ");
+                Serial.println(state);
+
+            }
+        } else {
+            Serial.println("[HTTP] GET... failed, error: %s\n");
+           // Serial.println("http.errorToString(httpCode).c_str())";
+        }
+
+        http.end();
 
   Serial.println("Disconnect Mqtt.");
   client.disconnect();
@@ -199,85 +224,5 @@ void loop() {
   delay(500); // wait for deep sleep to happen
   delay(120000);
   delay(10000); // For debug
-}
-
-// Open connection to the HTTP server
-bool connect(const char* hostName) {
-  Serial.print("Connect to ");
-  Serial.println(hostName);
-  bool ok = espClient.connect(hostName, port);
-  Serial.println(ok ? "Connected" : "Connection Failed!");
-  return ok;
-}
-
-// Send the HTTP GET request to the server
-bool sendRequest(const char* host, const char* resource) {
-  Serial.print("GET ");
-  Serial.println(resource);
-
-  espClient.print("GET ");
-  espClient.print(resource);
-  espClient.println(" HTTP/1.0");
-  espClient.print("Host: ");
-  espClient.println(host);
-  espClient.println("Connection: close");
-  espClient.println();
-
-  return true;
-}
-
-// Skip HTTP headers so that we are at the beginning of the response's body
-bool skipResponseHeaders() {
-  // HTTP headers end with an empty line
-  char endOfHeaders[] = "\r\n\r\n";
-
-  espClient.setTimeout(HTTP_TIMEOUT);
-  bool ok = espClient.find(endOfHeaders);
-
-  if (!ok) {
-    Serial.println("No response or invalid response!");
-  }
-
-  return ok;
-}
-bool readReponseContent(struct UserData* userData) {
-  // Compute optimal size of the JSON buffer according to what we need to parse.
-  // This is only required if you use StaticJsonBuffer.
-  const size_t BUFFER_SIZE =
-      JSON_OBJECT_SIZE(8)    // the root object has 8 elements
-      + JSON_OBJECT_SIZE(5)  // the "address" object has 5 elements
-      + JSON_OBJECT_SIZE(2)  // the "geo" object has 2 elements
-      + JSON_OBJECT_SIZE(3)  // the "company" object has 3 elements
-      + MAX_CONTENT_SIZE;    // additional space for strings
-
-  // Allocate a temporary memory pool
-  DynamicJsonBuffer jsonBuffer(BUFFER_SIZE);
-
-  JsonObject& root = jsonBuffer.parseObject(client);
-
-  if (!root.success()) {
-    Serial.println("JSON parsing failed!");
-    return false;
-  }
-
-  // Here were copy the strings we're interested in
-  strcpy(userData->state, root["state"]);
-  // It's not mandatory to make a copy, you could just use the pointers
-  // Since, they are pointing inside the "content" buffer, so you need to make
-  // sure it's still in memory when you read the string
-
-  return true;
-}
-
-// Print the data extracted from the JSON
-void printUserData(const struct UserData* userData) {
-  Serial.print("State = ");
-  Serial.println(userData->state);
-}
-
-// Close the connection with the HTTP server
-void disconnect() {
-  Serial.println("Disconnect");
-  espClient.stop();
 }
 
