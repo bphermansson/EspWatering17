@@ -5,7 +5,6 @@
 // DS18B20
 #include <OneWire.h>
 #include <DallasTemperature.h>
-//#include <ArduinoOTA.h>
 #include <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
 
@@ -20,9 +19,8 @@ DallasTemperature DS18B20(&oneWire);
 
 const char* server = " 192.168.1.142";  // server's address
 int port = 8123;
-//const char* resource = "/api/states/binary_sensor.ljusute"; // http resource
-const unsigned long HTTP_TIMEOUT = 10000;  // max respone time from server
-const size_t MAX_CONTENT_SIZE = 512;       // max size of the HTTP response
+//const unsigned long HTTP_TIMEOUT = 10000;  // max respone time from server
+//const size_t MAX_CONTENT_SIZE = 512;       // max size of the HTTP response
 
 /* Spänningsdelare på solcell
 100k till jord, 390k till solcell
@@ -72,8 +70,6 @@ void setup() {
 
   // Mqtt
   client.setServer(mqtt_server, 1883);
-  // Mqtt callback for incoming messages
-  //client.setCallback(callback);
 
   // Read Vcc
   solarVoltAdc = analogRead(A0);
