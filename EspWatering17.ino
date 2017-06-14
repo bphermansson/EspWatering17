@@ -17,18 +17,12 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
 
 // Home Assistant server 
-// http://192.168.1.142:8123/api/states/binary_sensor.ljusute
 
 const char* server = " 192.168.1.142";  // server's address
 int port = 8123;
-const char* resource = "/api/states/binary_sensor.ljusute"; // http resource
+//const char* resource = "/api/states/binary_sensor.ljusute"; // http resource
 const unsigned long HTTP_TIMEOUT = 10000;  // max respone time from server
 const size_t MAX_CONTENT_SIZE = 512;       // max size of the HTTP response
-
-// The type of data that we want to extract from the page
-struct UserData {
-  char state[5];
-};
 
 /* Spänningsdelare på solcell
 100k till jord, 390k till solcell
@@ -55,13 +49,16 @@ adc value * 5 = Solar cell volt i mV.
 
 */
 int solarVoltAdc = 0;
+int pumpio = 13;
 
 const char* ssid = "NETGEAR83";
 const char* password = "..........";
 const char* mqtt_server = "192.168.1.79";
 
 // Mqtt topic to publish to
-const char* mqtt_pub_topic = "espwatering";
+const char* mqtt_pub_topic = "espwatering/monitor";
+const char* mqtt_pub_topicPump = "espwateringPump";
+const char* mqtt_pub_pumpstatus = "espwatering/pumprun/set";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -87,6 +84,9 @@ void setup() {
 
   // Water level sensor on Gpio5
   //pinMode(5, INPUT_PULLUP);
+
+  // Water pump on Gpio x
+  pinMode(pumpio, OUTPUT);
 
 }
 
@@ -177,21 +177,21 @@ void loop() {
   // Shall the waterpump run?
   // Lets ask the Home Assistant installation if it's been run today
   // If not, run it. 
-  // We get Json data from http://192.168.1.142:8123/api/states/binary_sensor.ljusute
+  // We get Json data from http://192.168.1.142:8123/api/states/switch.pumprun
   Serial.println("connect to Hass");
 
   HTTPClient http;
-  http.begin("http://192.168.1.142:8123/api/states/binary_sensor.ljusute"); //HTTP
+  http.begin("http://192.168.1.142:8123/api/states/switch.pumprun"); //HTTP
   int httpCode = http.GET();
   if(httpCode > 0) {
        // HTTP header has been send and Server response header has been handled
-            Serial.println("[HTTP] GET... code: %d\n");
-            Serial.println(httpCode);
+            //Serial.println("[HTTP] GET... code: %d\n");
+            //Serial.println(httpCode);
 
             // file found at server
             if(httpCode == HTTP_CODE_OK) {
                 String payload = http.getString();
-                Serial.println(payload);
+                Serial.println("Got data from Home Assistant");
                 StaticJsonBuffer<300> jsonBuffer;
                 char json[300];
                 payload.toCharArray(json,300);
@@ -204,6 +204,24 @@ void loop() {
                 String state = root["state"];
                 Serial.println("The Hass switch is: ");
                 Serial.println(state);
+
+                // State is set to off at sunrise and to on when the pump runs
+                if (state=="off") {
+                  // Pump has not run today
+                  Serial.println("Start pump");
+                  // TODO: Check water level
+                  
+                  digitalWrite(pumpio, HIGH);
+                  // Tell Hass about the run
+                  client.publish(mqtt_pub_pumpstatus, "ON");  //Set the switch high
+                  
+                  
+                  delay(5000);  // Run for five seconds
+                  digitalWrite(pumpio, LOW);
+                }
+                else {
+                  Serial.println("Not running pump");
+                }
 
             }
         } else {
