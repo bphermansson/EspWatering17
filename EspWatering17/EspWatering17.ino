@@ -74,6 +74,7 @@ const char* mqtt_pub_waterlevel = "espwatering/waterlevel";
 // Prototypes
 void setup_wifi();
 void reconnect();
+void measurements();
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -101,6 +102,26 @@ void setup() {
 
   // Water pump on Gpio 13
   pinMode(pumpio, OUTPUT);
+}
+
+
+void loop() {
+// Check solar voltage and temperature, then send it via Mqtt
+/*  solarVoltAdc = analogRead(A0);
+  Serial.print("Adc Value:");
+  Serial.println(solarVoltAdc);     //Print ADC value
+  int solarvolt = solarVoltAdc * 5;
+  Serial.print("Solar cell volt:");
+  Serial.print(solarvolt);
+  Serial.println("mV");
+  // Add solar volt value to Json object
+  root["solarvolt"] = solarvolt;
+*/
+
+  // Shall the waterpump run?
+  // Lets ask the Home Assistant installation if it's been run today
+  // If not, run it.
+  // We get Json data from http://192.168.1.142:8123/api/states/switch.pumprun
 
   // Reconnect to Mqtt server if necessary
   if (!client.connected()) {
@@ -111,7 +132,17 @@ void setup() {
   // Check Vcc and temp, publish it via mqtt
   measurements();
 
+  Serial.println("Disconnect Mqtt.");
+  client.disconnect();
+  Serial.print("Disconnect Wifi.");
+  //WiFi.disconnect();
+  delay(100);
+  Serial.print("Enter deep sleep.");
 
+  //ESP.deepSleep(SLEEP_DELAY_IN_SECONDS * 1000000, WAKE_RF_DEFAULT);
+  delay(500); // wait for deep sleep to happen
+  delay(120000);
+  delay(10000); // For debug
 }
 
 void measurements() {
@@ -132,38 +163,6 @@ void measurements() {
   //https://gist.github.com/virgilvox/ffe1cc08a240db9792d3
   Serial.println("Publish to Mqtt.");
   client.publish(mqtt_pub_topic, msg);  // Payload as char
-
-}
-
-void loop() {
-// Check solar voltage and temperature, then send it via Mqtt
-/*  solarVoltAdc = analogRead(A0);
-  Serial.print("Adc Value:");
-  Serial.println(solarVoltAdc);     //Print ADC value
-  int solarvolt = solarVoltAdc * 5;
-  Serial.print("Solar cell volt:");
-  Serial.print(solarvolt);
-  Serial.println("mV");
-  // Add solar volt value to Json object
-  root["solarvolt"] = solarvolt;
-*/
-
-  // Shall the waterpump run?
-  // Lets ask the Home Assistant installation if it's been run today
-  // If not, run it.
-  // We get Json data from http://192.168.1.142:8123/api/states/switch.pumprun
-
-  Serial.println("Disconnect Mqtt.");
-  client.disconnect();
-  Serial.print("Disconnect Wifi.");
-  //WiFi.disconnect();
-  delay(100);
-  Serial.print("Enter deep sleep.");
-
-  //ESP.deepSleep(SLEEP_DELAY_IN_SECONDS * 1000000, WAKE_RF_DEFAULT);
-  delay(500); // wait for deep sleep to happen
-  delay(120000);
-  delay(10000); // For debug
 }
 
 boolean checkHass(){
