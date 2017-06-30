@@ -118,11 +118,6 @@ void loop() {
   root["solarvolt"] = solarvolt;
 */
 
-  // Shall the waterpump run?
-  // Lets ask the Home Assistant installation if it's been run today
-  // If not, run it.
-  // We get Json data from http://192.168.1.142:8123/api/states/switch.pumprun
-
   // Reconnect to Mqtt server if necessary
   if (!client.connected()) {
     reconnect();
@@ -134,14 +129,16 @@ void loop() {
 
   Serial.println("Disconnect Mqtt.");
   client.disconnect();
-  Serial.print("Disconnect Wifi.");
-  //WiFi.disconnect();
-  delay(100);
-  Serial.print("Enter deep sleep.");
 
-  //ESP.deepSleep(SLEEP_DELAY_IN_SECONDS * 1000000, WAKE_RF_DEFAULT);
-  delay(500); // wait for deep sleep to happen
-  delay(120000);
+  checkHass();
+
+  runPump();
+
+  Serial.print("Disconnect Wifi.");
+  WiFi.disconnect();
+  delay(100);
+
+  //delay(120000);
   delay(10000); // For debug
 }
 
@@ -166,6 +163,12 @@ void measurements() {
 }
 
 boolean checkHass(){
+  
+    // Shall the waterpump run?
+    // Lets ask the Home Assistant installation if it's been run today
+    // If not, run it.
+    // We get Json data from http://192.168.1.142:8123/api/states/switch.pumprun
+
   Serial.println("Connect to Hass");
   HTTPClient http;
   http.begin("http://192.168.1.142:8123/api/states/switch.pumprun"); //HTTP
@@ -208,31 +211,30 @@ boolean checkHass(){
         //return state;
 }
 
-void runPump(String state){
-
-                  // State is set to off at sunrise and to on when the pump runs
-                  if (state=="off") {
-                    // Pump has not run today
-                    int waterlevel = digitalRead(watersensor);
-                    if (waterlevel == 1) {
-                      Serial.println("Water level ok");
-                      client.publish(mqtt_pub_waterlevel, "OK");
-                      Serial.println("Start pump");
-                      digitalWrite(pumpio, HIGH);
-                      // Tell Hass about the run
-                      client.publish(mqtt_pub_pumpstatus, "ON");  //Set the switch high
-                    }
-                    // Water tank empty
-                    else {
-                      Serial.println("Water tank empty");
-                      client.publish(mqtt_pub_waterlevel, "LOW");
-                    }
-                    delay(15000);  // Run for five seconds
-                    digitalWrite(pumpio, LOW);
-                  }
-                  else {
-                    Serial.println("Not running pump");
-                  }
+void runPump(){
+    // State is set to off at sunrise and to on when the pump runs
+    if (!stateBool) {
+      // Pump has not run today
+      int waterlevel = digitalRead(watersensor);
+      if (waterlevel == 1) {
+        Serial.println("Water level ok");
+        client.publish(mqtt_pub_waterlevel, "OK");
+        Serial.println("Start pump");
+        digitalWrite(pumpio, HIGH);
+        // Tell Hass about the run
+        client.publish(mqtt_pub_pumpstatus, "ON");  //Set the switch high
+        delay(5000);  // Run for five seconds
+        digitalWrite(pumpio, LOW);
+      }
+      // Water tank empty
+     else {
+        Serial.println("Water tank empty");
+        client.publish(mqtt_pub_waterlevel, "LOW");
+     }
+   }
+   else {
+     Serial.println("Not running pump");
+   }
 }
 
 void setup_wifi() {
