@@ -20,6 +20,7 @@ ADC_MODE(ADC_VCC);
 int pumpio = 13;
 // Watersensor
 int watersensor = 14;
+byte waterlevel;
 
 // DS18B20 on Gpio13
 #define ONE_WIRE_BUS 13  // DS18B20 pin
@@ -70,6 +71,7 @@ const char* mqtt_pub_topic = "espwatering/monitor";
 const char* mqtt_pub_topicPump = "espwateringPump";
 const char* mqtt_pub_pumpstatus = "espwatering/pumprun/state";
 const char* mqtt_pub_waterlevel = "espwatering/waterlevel";
+const char* mqtt_pub_setswitch = "espwatering/pumprun/state";
 
 // Prototypes
 void setup_wifi();
@@ -90,18 +92,32 @@ StaticJsonBuffer<200> jsonBuffer;
 JsonObject& root = jsonBuffer.createObject();
 
 void setup() {
+  // Configure
   Serial.begin(9600);
   Serial.println("Booting");
   setup_wifi();
-
   // Mqtt
   client.setServer(mqtt_server, 1883);
-
   // Water level sensor on Gpio14
   pinMode(watersensor, INPUT_PULLUP);
-
   // Water pump on Gpio 13
   pinMode(pumpio, OUTPUT);
+
+  // Real work tasks
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  // Check Vcc and temp, publish it via mqtt
+  measurements();
+  checkHass();
+  runPump();
+  Serial.println("Disconnect Mqtt.");
+  client.disconnect();
+
+  //ESP.deepSleep(10e6);  // 10s, 10000000 uS
+  ESP.deepSleep(20e8); // 2000s, ca 33,3 minutes. 2000000000uS.Green house
 }
 
 
@@ -117,29 +133,26 @@ void loop() {
   // Add solar volt value to Json object
   root["solarvolt"] = solarvolt;
 */
-
+  //WiFi.reconnect();
   // Reconnect to Mqtt server if necessary
-  if (!client.connected()) {
+/*  if (!client.connected()) {
     reconnect();
   }
   client.loop();
 
   // Check Vcc and temp, publish it via mqtt
   measurements();
-
+  checkHass();
+  runPump();
   Serial.println("Disconnect Mqtt.");
   client.disconnect();
+  //Serial.print("Disconnect Wifi.");
+  //WiFi.disconnect();
+  //delay(100);
 
-  checkHass();
-
-  runPump();
-
-  Serial.print("Disconnect Wifi.");
-  WiFi.disconnect();
-  delay(100);
-
-  //delay(120000);
-  delay(10000); // For debug
+  delay(120000);
+  */
+  //delay(10000); // For debug
 }
 
 void measurements() {
@@ -154,6 +167,10 @@ void measurements() {
   Serial.print("Temperature: ");
   Serial.println(temp);
 
+  waterlevel = !digitalRead(watersensor);
+  root["waterlevel"] = waterlevel;
+  Serial.print("Waterlevel (0=empty) : ");
+  Serial.println(waterlevel);
   // Convert json object to char
   root.printTo((char*)msg, root.measureLength() + 1);
 
@@ -163,7 +180,7 @@ void measurements() {
 }
 
 boolean checkHass(){
-  
+
     // Shall the waterpump run?
     // Lets ask the Home Assistant installation if it's been run today
     // If not, run it.
@@ -215,21 +232,22 @@ void runPump(){
     // State is set to off at sunrise and to on when the pump runs
     if (!stateBool) {
       // Pump has not run today
-      int waterlevel = digitalRead(watersensor);
-      if (waterlevel == 1) {
+      if (waterlevel == 0) {
         Serial.println("Water level ok");
-        client.publish(mqtt_pub_waterlevel, "OK");
-        Serial.println("Start pump");
+        //client.publish(mqtt_pub_waterlevel, "OK");
+        Serial.println ("Start pump");
         digitalWrite(pumpio, HIGH);
         // Tell Hass about the run
-        client.publish(mqtt_pub_pumpstatus, "ON");  //Set the switch high
+        client.publish(mqtt_pub_setswitch, "ON");  //Set the switch high
         delay(5000);  // Run for five seconds
         digitalWrite(pumpio, LOW);
+        Serial.println ("Stop pump");
+
       }
       // Water tank empty
      else {
         Serial.println("Water tank empty");
-        client.publish(mqtt_pub_waterlevel, "LOW");
+        //client.publish(mqtt_pub_waterlevel, "LOW");
      }
    }
    else {
