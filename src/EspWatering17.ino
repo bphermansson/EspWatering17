@@ -14,10 +14,10 @@ ADC_MODE(ADC_VCC);
 #include <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
 
-#define SLEEP_DELAY_IN_SECONDS 30
+//#define SLEEP_DELAY_IN_SECONDS 30
 
 // Waterpump
-int pumpio = 13;
+int pumpio = 12;
 // Watersensor
 int watersensor = 14;
 byte waterlevel;
@@ -68,6 +68,7 @@ const char* mqtt_server = "192.168.1.79";
 
 // Mqtt topic to publish to
 const char* mqtt_pub_topic = "espwatering/monitor";
+const char* mqtt_pub_values = "espwatering/values";
 const char* mqtt_pub_topicPump = "espwateringPump";
 const char* mqtt_pub_pumpstatus = "espwatering/pumprun/state";
 const char* mqtt_pub_waterlevel = "espwatering/waterlevel";
@@ -85,16 +86,21 @@ char msg[50];
 
 // Temp value from DS8B20
 float temp;
-boolean stateBool;
+boolean stateBool, error;
+int iSlider;
 
 // Json object to send via Mqtt
 StaticJsonBuffer<200> jsonBuffer;
 JsonObject& root = jsonBuffer.createObject();
 
+const char compile_date[] = __DATE__ " " __TIME__;
+
 void setup() {
   // Configure
-  Serial.begin(9600);
-  Serial.println("Booting");
+  Serial.begin(115200);
+  Serial.print("Booting version compiled at ");
+  Serial.println(compile_date);
+
   setup_wifi();
   // Mqtt
   client.setServer(mqtt_server, 1883);
@@ -112,6 +118,10 @@ void setup() {
   // Check Vcc and temp, publish it via mqtt
   measurements();
   checkHass();
+  if (error){
+    Serial.println("Cant connect to Hass, sleeping before next try");
+    ESP.deepSleep(20e8);
+  }
   runPump();
   Serial.println("Disconnect Mqtt.");
   client.disconnect();
@@ -122,41 +132,17 @@ void setup() {
 
 
 void loop() {
-// Check solar voltage and temperature, then send it via Mqtt
-/*  solarVoltAdc = analogRead(A0);
-  Serial.print("Adc Value:");
-  Serial.println(solarVoltAdc);     //Print ADC value
-  int solarvolt = solarVoltAdc * 5;
-  Serial.print("Solar cell volt:");
-  Serial.print(solarvolt);
-  Serial.println("mV");
-  // Add solar volt value to Json object
-  root["solarvolt"] = solarvolt;
-*/
-  //WiFi.reconnect();
-  // Reconnect to Mqtt server if necessary
-/*  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
-
-  // Check Vcc and temp, publish it via mqtt
-  measurements();
-  checkHass();
-  runPump();
-  Serial.println("Disconnect Mqtt.");
-  client.disconnect();
-  //Serial.print("Disconnect Wifi.");
-  //WiFi.disconnect();
-  //delay(100);
-
-  delay(120000);
-  */
-  //delay(10000); // For debug
+  // Nothing to do here, all is done in setup
 }
 
 void measurements() {
-  uint32_t getVcc = ESP.getVcc();
+  uint32_t getVcc;
+
+  for (int x=0;x<10;x++) {
+    getVcc = ESP.getVcc();
+    delay(10);
+
+  }
   root["batt"] = getVcc;
   Serial.print("Vcc: ");
   Serial.println(getVcc);
@@ -173,10 +159,8 @@ void measurements() {
   Serial.println(waterlevel);
   // Convert json object to char
   root.printTo((char*)msg, root.measureLength() + 1);
-
-  //https://gist.github.com/virgilvox/ffe1cc08a240db9792d3
   Serial.println("Publish to Mqtt.");
-  client.publish(mqtt_pub_topic, msg);  // Payload as char
+  client.publish(mqtt_pub_values, msg);  // Payload as char
 }
 
 boolean checkHass(){
@@ -189,43 +173,63 @@ boolean checkHass(){
   Serial.println("Connect to Hass");
   HTTPClient http;
   http.begin("http://192.168.1.142:8123/api/states/switch.pumprun"); //HTTP
-  int httpCode = http.GET();
+  int httpCode;
+  httpCode = http.GET();
   if(httpCode > 0) {
-       // HTTP header has been send and Server response header has been handled
-            //Serial.println("[HTTP] GET... code: %d\n");
-            //Serial.println(httpCode);
-
-            // file found at server
-            if(httpCode == HTTP_CODE_OK) {
-                String payload = http.getString();
-                Serial.println("Got data from Home Assistant");
-                StaticJsonBuffer<300> jsonBuffer;
-                char json[300];
-                payload.toCharArray(json,300);
-                JsonObject& root = jsonBuffer.parseObject(json);
-                // Test if parsing succeeds.
-                if (!root.success()) {
-                  Serial.println("parseObject() failed");
-                  //return;
-                }
-                String state = root["state"];
-                if (state=="on") {
-                  stateBool=true;
-                }
-                else {
-                  stateBool=false;
-                }
-
-            }
-        } else {
-            Serial.println("[HTTP] GET... failed, error: %s\n");
-           // Serial.println("http.errorToString(httpCode).c_str())";
-           //state="Unknown";
+      if(httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        Serial.println("Got data from Home Assistant");
+        StaticJsonBuffer<300> jsonBuffer;
+        char json[300];
+        payload.toCharArray(json,300);
+        JsonObject& root = jsonBuffer.parseObject(json);
+        // Test if parsing succeeds.
+        if (!root.success()) {
+          Serial.println("parseObject() failed");
         }
-        http.end();
-        Serial.println("The Hass switch is: ");
-        Serial.println(stateBool);
-        //return state;
+        String state = root["state"];
+        if (state=="on") {
+          stateBool=true;
+        }
+        else {
+          stateBool=false;
+        }
+      }
+  }
+  else {
+    Serial.println("[HTTP] GET failed");
+    error=true;
+    return error;
+  }
+  http.end();
+
+  http.begin("http://192.168.1.142:8123/api/states/switch.pumprun"); //HTTP
+  httpCode = http.GET();
+  if(httpCode > 0) {
+      if(httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        Serial.println("Got slider data from Home Assistant");
+        StaticJsonBuffer<300> jsonBuffer;
+        char json[300];
+        payload.toCharArray(json,300);
+        JsonObject& root = jsonBuffer.parseObject(json);
+        // Test if parsing succeeds.
+        if (!root.success()) {
+          Serial.println("parseObject() failed");
+        }
+        String slider = root["state"];
+        iSlider = slider.toInt();
+      }
+  }
+  else {
+    Serial.println("[HTTP] GET failed");
+    error=true;
+    return error;
+  }
+  http.end();
+
+  Serial.println("The Hass switch is: ");
+  Serial.println(stateBool);
 }
 
 void runPump(){
@@ -234,19 +238,21 @@ void runPump(){
       // Pump has not run today
       if (waterlevel == 0) {
         Serial.println("Water level ok");
-        //client.publish(mqtt_pub_waterlevel, "OK");
+        client.publish(mqtt_pub_topic, "Water level ok");
         Serial.println ("Start pump");
         digitalWrite(pumpio, HIGH);
         // Tell Hass about the run
         client.publish(mqtt_pub_setswitch, "ON");  //Set the switch high
-        delay(5000);  // Run for five seconds
+        client.publish(mqtt_pub_topic, "Pump started");
+        delay(iSlider);  // Run for x seconds
         digitalWrite(pumpio, LOW);
         Serial.println ("Stop pump");
-
+        client.publish(mqtt_pub_topic, "Pump stopped");
       }
       // Water tank empty
      else {
         Serial.println("Water tank empty");
+        client.publish(mqtt_pub_topic, "Out of water!");
         //client.publish(mqtt_pub_waterlevel, "LOW");
      }
    }
